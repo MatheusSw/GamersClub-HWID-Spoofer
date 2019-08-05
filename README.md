@@ -1,3 +1,6 @@
+# Patched
+This is currently patched and I won't be updating the code anymore, it should be used just for reference, as it can be optimized severely.
+
 # Gamersclub HWID Spoofer
 Just a simple HWID spoofer for GamersClub without hooking disk.sys major functions which they check for in their driver.
 
