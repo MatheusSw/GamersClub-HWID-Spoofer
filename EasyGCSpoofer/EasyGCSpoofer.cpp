@@ -4,93 +4,109 @@ void SpoofSerial(char* serial, bool is_smart);
 unsigned long g_startup_time; //Extern declaration
 
 JSONLogger * jsLogger = new JSONLogger();
-int runs = 1;
-int secondrun = 1;
 
-using DeviceIoControl_t = bool(__stdcall *)(
+bool second_time = false;
+DeviceIoControl_t o_device_ioctl = { 0 };
+
+void change_serial(char* p_serial) {
+	jsLogger->loggers->device_ioctl["Serial Number"]["Before"] = p_serial;
+
+	DWORD oldprot = 0;
+	VirtualProtect(p_serial, sizeof(char[20]), PAGE_EXECUTE_READWRITE, &oldprot);
+	SpoofSerial(p_serial, false);
+	VirtualProtect(p_serial, sizeof(char[20]), oldprot, 0);
+
+	jsLogger->loggers->device_ioctl["Serial Number"]["After"] = p_serial;
+	return;
+}
+
+char* get_current_serial(PSTORAGE_DEVICE_DESCRIPTOR p_device_descriptor) {
+	DWORD serial_number_offset = p_device_descriptor->SerialNumberOffset;
+	auto serial = ReCa<char*>(ReCa<DWORD>(p_device_descriptor) + serial_number_offset);
+	return serial;
+}
+
+void log_device_descriptor(PSTORAGE_DEVICE_DESCRIPTOR p_device_descriptor) {
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["Version"] += p_device_descriptor->Version;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["Size"] += p_device_descriptor->Size;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["DeviceType"] += p_device_descriptor->DeviceType;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["VendorID"] += p_device_descriptor->VendorIdOffset;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["ProductID"] += p_device_descriptor->ProductIdOffset;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["Serial Offset"] += p_device_descriptor->SerialNumberOffset;
+	jsLogger->loggers->device_ioctl["Device Descriptor"]["Raw Properties Length"] += p_device_descriptor->RawPropertiesLength;
+	return;
+}
+
+bool __stdcall hk_device_ioctl(
 	HANDLE       hDevice,
 	DWORD        dwIoControlCode,
 	LPVOID       lpInBuffer,
 	DWORD        nInBufferSize,
-	LPVOID       lpOutBuffer,
-	DWORD        nOutBufferSize,
-	LPDWORD      lpBytesReturned,
-	LPOVERLAPPED lpOverlapped);
-
-DeviceIoControl_t originalDeviceIo = { NULL };
-
-bool __stdcall hookedDeviceIOControl(
-	HANDLE       hDevice,
-	DWORD        dwIoControlCode,
-	LPVOID       lpInBuffer,
-	DWORD        nInBufferSize,
-	LPVOID       lpOutBuffer,
+	LPVOID       lpOutBuffer, //PSTORAGE_DEVICE_DESCRIPTOR
 	DWORD        nOutBufferSize,
 	LPDWORD      lpBytesReturned,
 	LPOVERLAPPED lpOverlapped)
 {
-	jsLogger->logDeviceIoControl["Hit Count"] = runs++;
-	if (!hDevice || !(dwIoControlCode == IOCTL_STORAGE_QUERY_PROPERTY || dwIoControlCode == SMART_RCV_DRIVE_DATA) || secondrun++ == 1)
-		return originalDeviceIo(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, lpOverlapped);
-	jsLogger->logDeviceIoControl["IoControlCode"] += (dwIoControlCode == IOCTL_STORAGE_QUERY_PROPERTY ? "IOCTL_STORAGE_QUERY_PROPERTY" : "SMART_RCV_DRIVE_DATA");
+	jsLogger->loggers->device_ioctl["Hit Count"] = jsLogger->device_ioctl_hits++;
+	if (!hDevice || !(dwIoControlCode == IOCTL_STORAGE_QUERY_PROPERTY || dwIoControlCode == SMART_RCV_DRIVE_DATA) || !second_time) {
+		second_time = true;
+		return o_device_ioctl(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, lpOverlapped);
+	}
 
-	originalDeviceIo(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, lpOverlapped); //Let them fill the struct
+	//let them fill the struct (lpOutBuffer)
+	o_device_ioctl(hDevice, dwIoControlCode, lpInBuffer, nInBufferSize, lpOutBuffer, nOutBufferSize, lpBytesReturned, lpOverlapped);
 
-	STORAGE_DEVICE_DESCRIPTOR * pDeviceDescriptor = (STORAGE_DEVICE_DESCRIPTOR*)lpOutBuffer; //Get the struct
-	jsLogger->logDeviceIoControl["Device Descriptor"]["Version"] += pDeviceDescriptor->Version;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["Size"] += pDeviceDescriptor->Size;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["DeviceType"] += pDeviceDescriptor->DeviceType;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["VendorID"] += pDeviceDescriptor->VendorIdOffset;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["ProductID"] += pDeviceDescriptor->ProductIdOffset;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["Serial Offset"] += pDeviceDescriptor->SerialNumberOffset;
-	jsLogger->logDeviceIoControl["Device Descriptor"]["Raw Properties Length"] += pDeviceDescriptor->RawPropertiesLength;
+	//Now it's our time to shine
+	//lpOutBuffer is now the filled PSTORAGE_DEVICE_DESCRIPTOR struct, containing our serial
+	PSTORAGE_DEVICE_DESCRIPTOR p_device_descriptor = ReCa<PSTORAGE_DEVICE_DESCRIPTOR>(lpOutBuffer);
 
-	auto serial = (char*)((DWORD)lpOutBuffer + pDeviceDescriptor->SerialNumberOffset);
-	Log("Changing Serial");
+	log_device_descriptor(p_device_descriptor);
 
-	jsLogger->logDeviceIoControl["Serial Numbers"]["Before"] = serial;
-	DWORD oldprot = 0;
-	VirtualProtect(serial, sizeof(char[20]), PAGE_EXECUTE_READWRITE, &oldprot);
-	SpoofSerial(serial, false);
-	VirtualProtect(serial, sizeof(char[20]), oldprot, 0);
-
-	jsLogger->logDeviceIoControl["Serial Numbers"]["After"] = serial;
-	Log("Changed");
-
+	change_serial(get_current_serial(p_device_descriptor));
 	return true;
 }
 
-void InitializeMisc() noexcept {
+void initialize_misc() noexcept {
 	FILETIME time = { 0 };
 	GetSystemTimeAsFileTime(&time);
 	g_startup_time = time.dwLowDateTime;
 
 	AllocConsole();
-	FILE * f = { nullptr };
+	FILE* f = { nullptr };
 	freopen_s(&f, "CONOUT$", "w", stdout);
 }
 
-bool Main(LPVOID param) {
-	InitializeMisc();
+void initiate_hook() {
+	auto device_ioctl_address = GetProcAddress(LoadLibrary(L"kernel32.dll"), "DeviceIoControl");
+	Log("Found DeviceIOControl at address [ %p ]", ReCa<void*>(device_ioctl_address));
+
+	Log("Detouring...");
+	o_device_ioctl = ReCa<DeviceIoControl_t>(DetourFunction((PBYTE)device_ioctl_address, ReCa<PBYTE>(hk_device_ioctl)));
+	Log("Detoured with %p", hk_device_ioctl);
+}
+
+void unhook_and_exit(HINSTANCE dll_handle) {
+	Log("Removing Detour and exiting");
+	DetourRemove(ReCa<PBYTE>(o_device_ioctl), ReCa<PBYTE>(hk_device_ioctl));
+
+	Log("Exiting");
+	jsLogger->write_all_logs();
+	FreeConsole();
+	FreeLibraryAndExitThread(dll_handle, 1);
+}
+
+bool Main(HINSTANCE dll_handle) {
+	initialize_misc();
 	Log("Initialized");
 
-	auto deviceIoControlAddy = GetProcAddress(LoadLibrary(L"kernel32.dll"), "DeviceIoControl");
-	Log("Found DeviceIOControl at address [ %p ]", ReCa<void*>(deviceIoControlAddy));
-	Log("Detouring...");
-	originalDeviceIo = ReCa<DeviceIoControl_t>(DetourFunction((PBYTE)deviceIoControlAddy, ReCa<PBYTE>(hookedDeviceIOControl)));
-	Log("Detoured with %p", hookedDeviceIOControl);
-	Log("Press F1 to Quit and save logs");
+	initiate_hook();
+	Log("Press F1 to Quit and Save logs");
+
 	while (!(GetAsyncKeyState(VK_F1) & 1)) {
 		Sleep(100);
 	}
-	jsLogger->WriteLogs();
-	Log("Removing Detour and exiting");
-	DetourRemove((PBYTE)originalDeviceIo, ReCa<PBYTE>(hookedDeviceIOControl));
-	Log("Detour Removed");
-	Log("Exiting");
 
-	FreeConsole();
-	FreeLibraryAndExitThread(ReCa<HMODULE>(param), 1);
+	unhook_and_exit(dll_handle);
 }
 
 bool __stdcall DllMain(
@@ -108,6 +124,7 @@ bool __stdcall DllMain(
 		delete jsLogger;
 		break;
 	default:
+		delete jsLogger;
 		break;
 	}
 	return TRUE;

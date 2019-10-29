@@ -14,7 +14,7 @@
 #pragma comment(lib, "detours.lib")
 
 #define ReCa reinterpret_cast
-#define DBG 1
+#define DBG	true
 
 #if DBG
 #define Log(format, ...)	printf_s("[ %-20s ] ", __FUNCTION__); \
@@ -23,3 +23,13 @@
 #else
 #define Log //
 #endif
+
+using DeviceIoControl_t = bool(__stdcall*)(
+	HANDLE       hDevice,
+	DWORD        dwIoControlCode,
+	LPVOID       lpInBuffer,
+	DWORD        nInBufferSize,
+	LPVOID       lpOutBuffer,
+	DWORD        nOutBufferSize,
+	LPDWORD      lpBytesReturned,
+	LPOVERLAPPED lpOverlapped);
