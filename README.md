@@ -1,17 +1,21 @@
-# Patched
-This is currently patched and I won't be updating the code anymore, it should be used just for reference, as it can be optimized severely.
-
 # Gamersclub HWID Spoofer
-Just a simple HWID spoofer for GamersClub without hooking disk.sys major functions which they check for in their driver.
+
+## Patched
+This is currently patched, also known as, *not working*, and I don't intend to update this whatsoever, so please don't contact me regarding this.
+
+## About
+Just a simple HWID Spoofer for the GamersClub anti-cheat, that doesn't hook any disk.sys major functions, because they have checks for those in their driver.
 
 The JSONLogger basically just logs the number of IOCTL requests between the Launcher (GCLauncher.exe) and the Driver (GCSecure.sys) for now.
 
+## Explanation
+
 ### What they do
 
-They use the standard/easiest way to get a HWID.
-1. CreateFileA/W on your main disk to retrieve the size of the storage device, so they can allocate memory for a later call to DeviceIO requesting the actual information on the disk. Check out STORAGE_DESCRIPTOR_HEADER on MSDN.
-2.With the size in hands and the buffer allocated, they make a second call via DeviceIoControl but this time they are looking to get the STORAGE_DEVICE_DESCRIPTOR structure.
-3. Then they get the serial by summing output_buffer and SerialOffset (that comes from the STORAGE_DEVICE_DESCRIPTOR structure) and using it.
+*They use the standard/easiest way to get a HWID*
+1. They call CreateFileA/W on your main HDD, so they can retrieve its size.
+2. Call the DeviceIoControl function, but this time they want the STORAGE_DEVICE_DESCRIPTOR structure.
+3. Sum the device descriptor serial offset to the struct base (STORAGE_DEVICE_DESCRIPTOR) and then use it on their anti-cheat.
 
 ### What we do
-Simply intercept that second call so we can get the pointer to the buffer that we'll later on call the original DeviceIoControl function and let they fill the structure, then we generate a new serial and simply replace it on the output buffer.
+1. Intercept the second call to get the pointer to the buffer, they'll fill the output buffer, we generate a new serial and replace it on the output buffer.
